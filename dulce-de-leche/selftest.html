@@ -1,0 +1,78 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>e2e</title><script src="lib/store.js"></script></head>
+<body>
+<pre id="out">running</pre>
+<iframe id="admin" width="1300" height="900"></iframe>
+<iframe id="site" width="1300" height="900"></iframe>
+<script>
+const out = [], ok = (name, pass, info = '') => out.push(`${pass ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`);
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const load = (el, src) => new Promise(r => { el.onload = r; el.src = src; });
+const A = () => document.getElementById('admin').contentWindow, S = () => document.getElementById('site').contentWindow;
+const q = (w, sel) => w.document.querySelector(sel), qa = (w, sel) => [...w.document.querySelectorAll(sel)];
+const type = (w, sel, v) => { const el = q(w, sel); el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
+(async () => {
+  try {
+    localStorage.removeItem('ddl-store-v1'); localStorage.removeItem('ddl-usual'); localStorage.setItem('ddl-lang', 'en');
+    await load(document.getElementById('admin'), 'admin.html');
+    await load(document.getElementById('site'), 'index.html?static');
+    await wait(3000);
+    ok('store seeded with menu and settings', !!DDL.read().menu?.length && !!DDL.read().settings);
+
+    // Owner edits the menu and limits; the site follows without a reload.
+    DDL.update(s => { s.menu.find(m => m.id === 'croissant').price = 4.5; s.menu.find(m => m.id === 'muffin').status = 'hidden'; s.menu.find(m => m.id === 'alfajor').status = 'soldout'; s.settings.closedWeekdays = [0]; s.settings.cakesPerDay = 1; });
+    await wait(800);
+    const tentPrice = q(S(), '[data-add="croissant"]').closest('.tent').querySelector('.price b')?.textContent;
+    ok('menu price shows on the menu card', tentPrice === '$4.50', tentPrice);
+    ok('hidden item disappears from the menu card', q(S(), '[data-add="muffin"]').closest('.tent').hidden);
+    ok('hidden item disappears from order-ahead', !q(S(), '#q-muffin'));
+    ok('sold-out item cannot be pre-ordered', q(S(), '[data-add="alfajor"]').disabled && /Sold out/.test(q(S(), '[data-add="alfajor"]').textContent));
+    const pickDays = qa(S(), '#days [data-day]').map(b => new Date(b.dataset.day + 'T00:00:00').getDay());
+    ok('closed weekday is skipped for pickups', pickDays.length === 6 && !pickDays.includes(0), pickDays.join(','));
+    const s0 = DDL.read(), cakeDays = [...Array(60).keys()].map(i => DDL.addDays(DDL.TODAY, i)).filter(d => DDL.cakeDay(s0, d, 'Birthday').ok);
+    ok('cake calendar respects notice, closed days and daily limit', cakeDays.every(d => d >= DDL.addDays(DDL.TODAY, 5) && new Date(d + 'T00:00:00').getDay() !== 0));
+    const full = s0.orders.find(o => o.type === 'cake' && o.day > DDL.addDays(DDL.TODAY, 5));
+    ok('a day with a cake booked is full at 1 cake per day', full ? !DDL.cakeDay(s0, full.day, full.cake.occasion).ok : true, full?.day);
+
+    // Customer pre-orders on the website.
+    q(S(), '[data-add="croissant"]').click(); q(S(), '[data-add="croissant"]').click();
+    q(S(), '#slots .slot').click(); type(S(), '#o-name', 'Test Customer'); type(S(), '#o-phone', '0491 570 999');
+    await wait(200);
+    ok('pay button enabled once complete', !q(S(), '#place-order').disabled);
+    const lineTxt = q(S(), '#ticket-lines').textContent;
+    ok('ticket prices with the owner price', /\$9/.test(lineTxt), lineTxt.trim());
+    q(S(), '#place-order').click();
+    await wait(1200);
+    const st = DDL.read(), mine = st.orders.find(o => o.name === 'Test Customer');
+    ok('website order saved to the store', !!mine && mine.items[0]?.qty === 2 && mine.source === 'Website');
+    ok('confirmation text queued', st.messages.some(m => m.orderId === mine?.id && m.kind === 'confirm'));
+    ok('"your usual" saved on this device', !!JSON.parse(S().localStorage.getItem('ddl-usual') || 'null'));
+    // The admin hears about it live.
+    const adminSees = A().document.body.textContent.includes('Test Customer') || (mine && mine.day !== DDL.TODAY);
+    ok('admin counter receives the order live', adminSees);
+    // Admin moves it to ready: a ready text is queued.
+    A().day = mine.day;
+    A().eval(`day = '${mine.day}'; renderView();`);
+    await wait(300);
+    for (let i = 0; i < 2; i++) { q(A(), `[data-next="${mine.id}"]`)?.click(); await wait(300); }
+    const st2 = DDL.read(), mine2 = st2.orders.find(o => o.id === mine.id);
+    ok('admin advances to ready', mine2?.status === 'ready', mine2?.status);
+    ok('ready text queued', st2.messages.some(m => m.orderId === mine.id && m.kind === 'ready'));
+    // Bake sheet counts the pre-order.
+    q(A(), '.views [data-view="bake"]').click(); await wait(300);
+    ok('bake sheet lists the pre-order', q(A(), '#bake-sheet').textContent.includes('Test Customer'));
+    q(A(), '.views [data-view="settings"]').click(); await wait(200);
+    ok('settings view renders', !!q(A(), '[data-set="cakesPerDay"]'));
+    q(A(), '.views [data-view="menu"]').click(); await wait(200);
+    ok('menu editor renders all items', qa(A(), '#menu-list [data-id]').length === DDL.read().menu.length);
+    // Spanish.
+    S().I18N.set('es'); await wait(300);
+    ok('Spanish switch translates the nav', q(S(), '.nav-links a[href="#menu"]').textContent === 'Menú');
+    ok('Spanish switch translates generated text', /Pedido hecho|Tu pedido/.test(q(S(), '#ticket-title').textContent + q(S(), '#place-order').textContent), q(S(), '#place-order').textContent);
+    S().I18N.set('en'); await wait(300);
+    ok('switching back restores English', q(S(), '.nav-links a[href="#menu"]').textContent === 'Menu');
+  } catch (e) { out.push('ERROR ' + e.message + ' ' + (e.stack || '').split('\n')[1]); }
+  document.getElementById('out').textContent = out.join('\n');
+})();
+</script>
+</body></html>

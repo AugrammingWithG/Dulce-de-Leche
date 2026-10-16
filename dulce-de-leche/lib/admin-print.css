@@ -1,0 +1,17 @@
+/* Printing from the counter view: only #print-area goes to paper (the bake sheet or a kitchen ticket). */
+@media print {
+    @page { margin: 12mm; }
+    body { background: #fff !important; color: #000 !important; }
+    body > *:not(#print-area) { display: none !important; }
+    #print-area { display: block !important; font-family: var(--sans); color: #000; }
+    #print-area * { color: #000 !important; background: none !important; box-shadow: none !important; }
+    #print-area .card { padding: 0; margin: 0 0 18px; }
+    #print-area .bake-grid { display: block; }
+    #print-area .chips-row, #print-area .pane-actions { display: none; }
+    #print-area h1 { font-family: var(--display); font-weight: 400; font-size: 22pt; margin-bottom: 4pt; }
+    #print-area .ticket-print { width: 72mm; font-size: 11pt; }
+    #print-area .ticket-print h1 { font-size: 16pt; }
+    #print-area .ticket-print .big { font-size: 20pt; font-weight: 700; margin: 4pt 0; }
+    #print-area .ticket-print hr { border: 0; border-top: 1px dashed #000; margin: 6pt 0; }
+  }    #print-area .print-only { display: block; }
+}
