@@ -6,6 +6,7 @@ import { defineConfig } from 'vite';
 // and lib/ (the shared data layer and translations, loaded as plain scripts so the files also open directly).
 export default defineConfig({
   root: 'dulce-de-leche',
+  base: './', // relative asset paths, so the build also works from a subfolder (GitHub Pages)
   server: { host: true },
   preview: { host: true },
   build: {
