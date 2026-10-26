@@ -110,9 +110,8 @@
   .day-head h1 { font-family: var(--display); font-weight: 400; font-size: 2rem; line-height: 1.1; letter-spacing: -0.01em; }
   .day-meta { color: var(--on-dark-soft); font-size: .95rem; }
   .day-meta b { color: var(--on-dark); font-weight: 700; }
-  .legend { display: flex; gap: 16px; font-size: .82rem; color: var(--on-dark-soft); margin-top: 4px; }
-  .legend i { display: inline-block; width: 18px; height: 6px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
-  .legend .t { background: var(--caramel); } .legend .y { background: rgba(201, 164, 92, .55); }
+  .edit-made { align-self: center; }
+  .edit-made[aria-pressed="true"] { background: rgba(201, 164, 92, .22); color: var(--brass-hi); box-shadow: inset 0 0 0 1px rgba(230, 200, 135, .5); }
 
   /* ---------- Shelves ---------- */
   .shelf { margin-top: 30px; }
@@ -134,14 +133,12 @@
   .left .num { font-size: 2rem; font-weight: 700; line-height: 1.1; color: var(--ink); display: inline-block; }
   .left .of { font-size: .82rem; color: var(--ink-soft); }
   .left .of input { width: 52px; min-height: 30px; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--card-warm); text-align: center; color: var(--ink); }
-  .bars { display: grid; gap: 4px; margin-top: 8px; }
-  .bar { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; font-size: .8rem; color: var(--ink-soft); }
-  .bar .track { display: block; height: 8px; border-radius: 999px; background: var(--paper); overflow: hidden; }
-  .bar .fill { display: block; height: 100%; border-radius: 999px; transform-origin: left; transition: width .6s var(--ease); }
-  .bar.t .fill { background: var(--caramel); }
-  .bar.y .fill { background: rgba(201, 164, 92, .55); }
-  .bar b { color: var(--ink); font-weight: 700; }
-  .delta { display: flex; align-items: center; gap: 2px; font-size: .8rem; font-weight: 700; margin-top: 6px; }
+  .gauge { display: block; height: 6px; margin-top: 10px; border-radius: 999px; background: var(--paper); overflow: hidden; }
+  .gauge .fill { display: block; height: 100%; border-radius: 999px; background: var(--caramel); transition: width .6s var(--ease); }
+  .cell.is-low .gauge .fill { background: var(--warn); }
+  .vs { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 2px 8px; margin-top: 8px; font-size: .8rem; color: var(--ink-soft); }
+  .vs b { color: var(--ink); font-weight: 700; }
+  .delta { display: inline-flex; align-items: center; gap: 2px; font-size: .8rem; font-weight: 700; }
   .delta svg { width: 14px; height: 14px; }
   .delta.up { color: var(--success); } .delta.down { color: var(--danger); } .delta.same { color: var(--ink-soft); }
   .cell-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; gap: 8px; }
@@ -281,7 +278,6 @@
     .day-head h1 { font-size: 1.6rem; }
     .cells { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .left .of input { width: 52px; }
-    .bar { grid-template-columns: 1fr; gap: 2px; }
     .cell-top { flex-wrap: wrap; }
     .cell-actions { display: grid; justify-items: start; gap: 6px; }
     .cell { padding: 10px 12px 12px; }
@@ -469,7 +465,7 @@
         <button class="btn btn-ghost btn-sm copy-counts" id="copy-counts" hidden>Use the day before's counts</button>
         <button class="sample-inline" id="sample-inline">Sample data · Reset</button>
       </div>
-      <div class="legend" aria-hidden="true"><span><i class="t"></i>Today</span><span><i class="y"></i>Day before</span></div>
+      <button class="btn btn-ghost btn-sm edit-made" id="edit-made" aria-pressed="false">Edit made counts</button>
     </div>
     <div id="shelf-list"></div>
   </main>
@@ -666,7 +662,7 @@ if (DDL.queueReminders(store)) save(); // day-before cake reminders
 const soldOn = d => DDL.soldOn(store, d);
 const leftOf = (d, id, v) => { const made = store.made[d]?.[keyOf(id, v)]; return made == null ? null : made - (soldOn(d)[keyOf(id, v)] || 0); };
 /* ================= View state ================= */
-let day = TODAY, filter = 'all', query = '', showDone = false, lastSold = null, arrived = new Set();
+let day = TODAY, filter = 'all', query = '', showDone = false, showUpcoming = false, editMade = false, lastSold = null, arrived = new Set();
 const recent = {}; // counter sales recorded this session, so Undo only offers what you just did
 const $ = id => document.getElementById(id);
 const layout = $('layout');
@@ -698,21 +694,27 @@ function renderShelves() {
     const keys = sh.items.flatMap(i => i.variants.map(v => keyOf(i.id, v)));
     const st = keys.reduce((a, k) => a + (sold[k] || 0), 0), sp = keys.reduce((a, k) => a + (prev[k] || 0), 0);
     const sid = 'sh-' + sh.shelf.replace(/\W/g, '');
+    // A cell answers one question, "how many are left?": the count, a gauge of what's left of the made
+    // count, and one line comparing sales with the day before. Made counts are edited in a separate mode.
     const cells = sh.items.flatMap(it => {
       const single = it.variants.length === 1;
-      const max = Math.max(1, ...it.variants.map(v => Math.max(sold[keyOf(it.id, v)] || 0, prev[keyOf(it.id, v)] || 0)));
       return it.variants.map((v, vi) => {
         const k = keyOf(it.id, v), s = sold[k] || 0, p = prev[k] || 0, m = made[k];
         const left = m == null ? null : m - s, out = !it.untracked && left !== null && left <= 0, low = !it.untracked && !out && left !== null && (left <= 3 || left <= m * .2);
         const delta = s - p, dCls = delta > 0 ? 'up' : delta < 0 ? 'down' : 'same';
         const full = single ? it.name : `${it.name} ${v}`;
         const counter = recent[day + k] || 0;
+        const madeCtl = editMade
+          ? `left of <label class="sr-only" for="m-${k}">${esc(full)} made</label><input id="m-${k}" type="number" min="0" inputmode="numeric" data-made="${k}" value="${m ?? ''}" placeholder="0"> made`
+          : m == null ? 'not counted' : `left of ${m}`;
+        const dTxt = delta > 0 ? ICON_UP + `${delta} more` : delta < 0 ? ICON_DOWN + `${-delta} fewer` : 'Same';
+        const vs = `<p class="vs"><span>${it.untracked ? `<b>${p}</b> the day before` : `<b>${s}</b> sold`}</span><span class="delta ${dCls}" title="Compared with the day before">${dTxt}</span></p>`;
         return `<div class="cell ${it.untracked ? 'untracked' : ''} ${out ? 'is-out' : low ? 'is-low' : ''} ${changed.has(k) ? 'tick' : ''} ${vi === 0 ? 'first-of-item' : ''}" data-key="${k}">
           <div class="cell-top">${single ? `<span class="v">${esc(it.name)}</span>` : `<span class="i">${esc(it.name)}</span><span class="v">${esc(v)}</span>`}</div>
-          ${it.untracked ? `<div class="left"><span class="num">${s}</span><span class="of">sold${single ? '' : ''}</span></div>` : `<div class="left"><span class="num" aria-label="${left === null ? 'not counted' : Math.max(0, left) + ' left'}">${left === null ? '—' : Math.max(0, left)}</span><span class="of">left of <label class="sr-only" for="m-${k}">${esc(full)} made</label><input id="m-${k}" type="number" min="0" inputmode="numeric" data-made="${k}" value="${m ?? ''}" placeholder="0"> made</span></div>`}
-          <div class="bars"><div class="bar t"><span class="track"><span class="fill" style="width:${s / max * 100}%"></span></span><span><b>${s}</b> today</span></div><div class="bar y"><span class="track"><span class="fill" style="width:${p / max * 100}%"></span></span><span>${p} before</span></div></div>
-          <p class="delta ${dCls}">${delta > 0 ? ICON_UP + `${delta} more` : delta < 0 ? ICON_DOWN + `${-delta} fewer` : 'Same as before'}</p>
-          <div class="cell-actions"><button class="sale-btn" data-sale="${k}" ${out ? 'disabled' : ''} aria-label="Record one ${esc(full)} sold at the counter">+1 sold</button>${counter ? `<button class="undo-btn" data-unsale="${k}" aria-label="Undo one counter sale of ${esc(full)}">Undo</button>` : out ? '<span class="flag out">Sold out</span>' : low ? '<span class="flag low">Running low</span>' : ''}</div>
+          ${it.untracked ? `<div class="left"><span class="num">${s}</span><span class="of">sold</span></div>` : `<div class="left"><span class="num" aria-label="${left === null ? 'not counted' : Math.max(0, left) + ' left'}">${left === null ? '—' : Math.max(0, left)}</span><span class="of">${madeCtl}</span></div>
+          <span class="gauge" aria-hidden="true"><span class="fill" style="width:${m ? Math.max(0, left) / m * 100 : 0}%"></span></span>`}
+          ${vs}
+          <div class="cell-actions"><button class="sale-btn" data-sale="${k}" ${out ? 'disabled' : ''} aria-label="Record one ${esc(full)} sold at the counter">+1 sold</button>${counter ? `<button class="undo-btn" data-unsale="${k}" aria-label="Undo one counter sale of ${esc(full)}">Undo</button>` : out ? '<span class="flag out">Sold out</span>' : low ? '<span class="flag low">Low</span>' : ''}</div>
         </div>`;
       });
     }).join('');
@@ -755,7 +757,7 @@ function renderRail() {
     html += active.length ? `<div class="group-label"><span>To do</span><span>${active.length}</span></div>` + active.map(o => orderCard(o)).join('') : `<div class="empty"><b>All caught up</b>Every order for this day is done.</div>`;
     if (done.length) html += `<button class="done-toggle" id="done-toggle" aria-expanded="${showDone}"><span>Done and cancelled</span><span>${done.length}</span></button>` + (showDone ? done.map(o => orderCard(o)).join('') : '');
   }
-  if (upcoming.length) html += `<div class="group-label"><span>Coming up: cakes and catering</span><span>${upcoming.length}</span></div>` + upcoming.map(o => orderCard(o, true)).join('');
+  if (upcoming.length) html += `<button class="done-toggle" id="upcoming-toggle" aria-expanded="${showUpcoming || !!query}"><span>Coming up: cakes and catering</span><span>${upcoming.length}</span></button>` + (showUpcoming || query ? upcoming.map(o => orderCard(o, true)).join('') : '');
   $('rail-list').innerHTML = html;
   arrived.clear();
 }
@@ -766,7 +768,9 @@ $('day-prev').addEventListener('click', () => { day = addDays(day, -1); lastSold
 $('day-next').addEventListener('click', () => { day = addDays(day, 1); lastSold = null; renderView(); });
 $('search').addEventListener('input', e => { query = e.target.value.trim(); renderRail(); });
 $('type-filter').addEventListener('click', e => { const b = e.target.closest('[data-filter]'); if (!b) return; filter = b.dataset.filter; renderRail(); });
-$('copy-counts').addEventListener('click', () => { store.made[day] = { ...store.made[addDays(day, -1)] }; save(); lastSold = null; render(); toast('Counts copied from the day before; adjust any that changed'); });
+const setEditMade = on => { editMade = on; const b = $('edit-made'); b.setAttribute('aria-pressed', on); b.textContent = on ? 'Done' : 'Edit made counts'; };
+$('edit-made').addEventListener('click', () => { setEditMade(!editMade); renderShelves(); if (editMade) document.querySelector('#shelf-list [data-made]')?.focus(); });
+$('copy-counts').addEventListener('click', () => { store.made[day] = { ...store.made[addDays(day, -1)] }; save(); lastSold = null; setEditMade(true); render(); toast('Counts copied from the day before; adjust any that changed'); });
 const resetSample = () => { if (!confirm('Reset to the sample data? Orders you added will be cleared.')) return; store = seed(); buildCatalog(); lastSold = null; renderView(); toast('Sample data restored'); };
 $('sample-chip').addEventListener('click', resetSample); $('sample-inline').addEventListener('click', resetSample); $('sample-rail').addEventListener('click', resetSample);
 
@@ -793,7 +797,8 @@ const railList = $('rail-list');
 railList.addEventListener('click', e => {
   const n = e.target.closest('[data-next]');
   if (n) { e.stopPropagation(); const o = store.orders.find(x => x.id === n.dataset.next); if (!o) return; advance(o); return; }
-  if (e.target.id === 'done-toggle' || e.target.closest('#done-toggle')) { showDone = !showDone; renderRail(); return; }
+  if (e.target.closest('#done-toggle')) { showDone = !showDone; renderRail(); return; }
+  if (e.target.closest('#upcoming-toggle')) { showUpcoming = !showUpcoming; renderRail(); return; }
   const c = e.target.closest('[data-open]'); if (c) openView(c.dataset.open);
 });
 railList.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-open]')) { e.preventDefault(); openView(e.target.dataset.open); } });
