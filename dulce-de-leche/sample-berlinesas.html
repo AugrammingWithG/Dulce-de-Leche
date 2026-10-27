@@ -82,6 +82,9 @@ import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const params = new URLSearchParams(location.search);
 const still = params.has('static') || matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -146,9 +149,16 @@ function surface(base, layers, size = 512) {
 const doughMat = new THREE.MeshPhysicalMaterial({
   vertexColors: true,
   map: texOf(surface('#FFFFFF', [['lo', '#E6D3BA', .35], ['hi', '#FFFFFF', .5], ['speck', '#D8C2A2', .5, 900]]), 7, 3),
-  bumpMap: texOf(surface('#808080', [['mid', '#FFFFFF', .7], ['hi', '#000000', .5], ['pore', '#2A2A2A', .5, 500]]), 7, 3, false), bumpScale: 1.3,
+  bumpMap: texOf(surface('#808080', [['mid', '#FFFFFF', .8], ['hi', '#000000', .65], ['pore', '#141414', .8, 900]]), 7, 3, false), bumpScale: 3.2,
   roughness: .74, sheen: .45, sheenRoughness: .42, sheenColor: new THREE.Color(0xFFFFFF),
 });
+// Where the sugar lies thick it fills the crust's pores and goes chalky; the bare fried sides keep their texture and a faint oily sheen.
+doughMat.onBeforeCompile = s => {
+  s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nattribute float sugar; varying float vSugar;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvSugar = sugar;');
+  s.fragmentShader = s.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vSugar;')
+    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(.52, .92, vSugar);')
+    .replace('#include <normal_fragment_maps>', THREE.ShaderChunk.normal_fragment_maps.replace('dHdxy_fwd()', 'dHdxy_fwd() * mix(.95, .45, vSugar)'));
+};
 const crumbMat = new THREE.MeshPhysicalMaterial({
   map: texOf(surface('#F0DCA8', [['lo', '#F8EACB', .55], ['pore', '#B48A4C', .75, 900], ['speck', '#C9A468', .4, 600]]), 3, 1),
   bumpMap: texOf(surface('#B0B0B0', [['pore', '#000000', .9, 900], ['mid', '#FFFFFF', .4]]), 3, 1, false), bumpScale: 3,
@@ -159,7 +169,7 @@ const creamy = (color, rough, coat, sheen = 0) => new THREE.MeshPhysicalMaterial
 const MAT = {
   dulce: creamy(0x9A5523, .34, .45),
   chocCream: creamy(0x4A2616, .42, .3),
-  biscoffCream: creamy(0xC48649, .5, .15, .1),
+  biscoffCream: creamy(0xBC8047, .62, .05, .15),
   custard: creamy(0xEFCB6A, .3, .45, .15),
   chocolate: new THREE.MeshPhysicalMaterial({ color: 0x2A140A, roughness: .3, clearcoat: .6, clearcoatRoughness: .12 }),
   biscuit: new THREE.MeshPhysicalMaterial({
@@ -174,7 +184,7 @@ const MAT = {
 const R = .3, HB = .125, HT = .25, TOP = HB + HT; // radius, height of the widest point, dome above it
 const domeY = r => { const c = Math.pow(Math.min(r, R) / R, 1.25), s = Math.sqrt(Math.max(0, 1 - c * c)); return HB + HT * Math.pow(s, .9); };
 function doughProfile() {
-  const pts = [], N = 64;
+  const pts = [], N = 140;
   for (let i = 0; i <= N; i++) {
     const th = -Math.PI / 2 + Math.PI * i / N, s = Math.sin(th), c = Math.max(0, Math.cos(th));
     const x = s < 0 ? R * Math.pow(c, .4) : R * Math.pow(c, .8), y = s < 0 ? HB * (1 - Math.pow(-s, 3)) : HB + HT * Math.pow(s, .9);
@@ -184,33 +194,41 @@ function doughProfile() {
 }
 const PROFILE = doughProfile();
 // Hand-made irregularity: every vertex pushed in or out from the centre by smooth noise; the base stays flat.
+// On top of that, the fried crust's own small blisters, and the slight waist where the dough floated in the oil.
 function shaper(sd) {
   const sx = rand(.95, 1.05), sz = rand(.95, 1.05), sy = rand(.93, 1.05), C = new THREE.Vector3(0, TOP / 2, 0), d = new THREE.Vector3();
   return v => {
-    const keep = smooth(0, .05, v.y);
+    const keep = smooth(0, .05, v.y), rr = Math.hypot(v.x, v.z);
+    if (rr > 1e-4) { const k = 1 - .007 * Math.exp(-(((v.y - HB - .004) / .024) ** 2)) / rr; v.x *= k; v.z *= k; }
     d.subVectors(v, C); const len = d.length() || 1, n = fbm(v.x * 5 + sd, v.y * 5, v.z * 5 + sd * .7);
-    v.addScaledVector(d, (n - .5) * 2 * .016 * keep / len);
+    const crust = (fbm(v.x * 34 + sd, v.y * 34, v.z * 34 - sd) - .5) * .008 + (vnoise(v.x * 95, v.y * 95 + sd, v.z * 95) - .5) * .0012;
+    v.addScaledVector(d, ((n - .5) * 2 * .016 + crust) * keep / len);
     v.x *= sx; v.z *= sz; v.y = v.y * (v.y > HB ? sy : 1) + (v.y > HB ? HB * (1 - sy) : 0);
     return v;
   };
 }
 const GOLD = new THREE.Color('#AE7434'), DEEP = new THREE.Color('#74431A'), RING = new THREE.Color('#E6CC96'), SUGAR = new THREE.Color('#F5F0E8');
 function dough(shape, sd) {
-  const geo = new THREE.LatheGeometry(PROFILE, 180), p = geo.attributes.position, v = new THREE.Vector3();
+  const SEG = 320, geo = new THREE.LatheGeometry(PROFILE, SEG), p = geo.attributes.position, v = new THREE.Vector3();
   for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); shape(v); p.setXYZ(i, v.x, v.y, v.z); }
   geo.computeVertexNormals();
-  const nrm = geo.attributes.normal, col = new Float32Array(p.count * 3), c = new THREE.Color();
+  // The lathe's first and last columns are the same points; share their normals so no seam shows.
+  const nrm = geo.attributes.normal, P = PROFILE.length;
+  for (let j = 0; j < P; j++) { const a = j, b = SEG * P + j; v.fromBufferAttribute(nrm, a).add(new THREE.Vector3().fromBufferAttribute(nrm, b)).normalize(); nrm.setXYZ(a, v.x, v.y, v.z); nrm.setXYZ(b, v.x, v.y, v.z); }
+  const col = new Float32Array(p.count * 3), sugar = new Float32Array(p.count), c = new THREE.Color();
   for (let i = 0; i < p.count; i++) {
     const x = p.getX(i), y = p.getY(i), z = p.getZ(i), ny = nrm.getY(i), n1 = fbm(x * 8 + sd, y * 8, z * 8), n2 = vnoise(x * 30, y * 30 + sd, z * 30), n3 = fbm(x * 18 - sd, y * 18, z * 18 + sd);
-    c.copy(GOLD).lerp(DEEP, smooth(.3, .8, n1) * .6 + (ny < -.4 ? .3 : 0));
+    // Fry colour, deepening down the sides and underneath.
+    c.copy(GOLD).lerp(DEEP, Math.min(1, smooth(.3, .8, n1) * .6 + smooth(.4, -.35, ny) * .55));
     // The pale ring where the dough floated in the oil, with a ragged edge.
     const w = .026 * (.75 + .6 * n1); c.lerp(RING, Math.exp(-(((y - HB - .004) / w) ** 2)) * .9);
     // Icing sugar: a thick, patchy coat on the crown that lets the fry colour through, thinning to a haze down the sides.
     const sug = smooth(.3, .85, ny + (n1 - .5) * .8 + (n3 - .5) * .5) * (.72 + .28 * n2) + smooth(-.1, .45, ny) * .3 * n2 * n3;
-    c.lerp(SUGAR, Math.min(.97, sug));
+    c.lerp(SUGAR, Math.min(.97, sug)); sugar[i] = Math.min(1, sug);
     col.set([c.r, c.g, c.b], i * 3);
   }
   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setAttribute('sugar', new THREE.BufferAttribute(sugar, 1));
   return new THREE.Mesh(geo, doughMat);
 }
 // A piped line of filling: a star-nozzle profile that twists along the path and tapers at both ends.
@@ -219,7 +237,10 @@ function piped(pts, r, mat, { ridge = .17, star = 8, twist = 7 } = {}) {
   const p = geo.attributes.position, v = new THREE.Vector3(), c = new THREE.Vector3();
   for (let i = 0; i <= ts; i++) {
     const t = i / ts; curve.getPointAt(t, c); const taper = Math.pow(Math.min(1, t / .07, (1 - t) / .07), .55);
-    for (let j = 0; j <= rs; j++) { const k = i * (rs + 1) + j; v.fromBufferAttribute(p, k).sub(c); v.multiplyScalar((1 + ridge * Math.cos(star * j / rs * Math.PI * 2 + t * twist)) * Math.max(.02, taper)).add(c); p.setXYZ(k, v.x, v.y, v.z); }
+    for (let j = 0; j <= rs; j++) { const k = i * (rs + 1) + j; v.fromBufferAttribute(p, k);
+      // Real piping is never machine-perfect: the bag's pressure wavers and the cream sags a little.
+      const wob = 1 + (fbm(v.x * 40 + 7, v.y * 40, v.z * 40) - .5) * .16 + (vnoise(v.x * 160, v.y * 160, v.z * 160) - .5) * .035;
+      v.sub(c).multiplyScalar((1 + ridge * Math.cos(star * j / rs * Math.PI * 2 + t * twist)) * Math.max(.02, taper) * wob).add(c); p.setXYZ(k, v.x, v.y, v.z); }
   }
   geo.computeVertexNormals(); return new THREE.Mesh(geo, mat);
 }
@@ -260,6 +281,18 @@ function shard() {
   return new THREE.Mesh(geo, MAT.chocolate);
 }
 const speckGeo = new THREE.IcosahedronGeometry(1, 0);
+// Lumpy little solids for sugar clumps and biscuit crumbs: a few shapes, each one knocked out of round.
+const lumps = (detail, amt) => [0, 1, 2].map(() => { const g = mergeVertices(new THREE.IcosahedronGeometry(1, detail)), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) { const k = 1 + rand(-amt, amt); p.setXYZ(i, p.getX(i) * k, p.getY(i) * k, p.getZ(i) * k); }
+  g.computeVertexNormals(); return g; });
+const CLUMPS = lumps(1, .25), CRUMBS = lumps(0, .45);
+const crumbMatFlat = MAT.biscuit.clone(); crumbMatFlat.flatShading = true;
+function scatter(geos, mat, n, place) {
+  const o = new THREE.Object3D(), ims = geos.map(g => new THREE.InstancedMesh(g, mat, Math.ceil(n / geos.length)));
+  for (let i = 0; i < n; i++) { place(o); o.updateMatrix(); ims[i % geos.length].setMatrixAt(Math.floor(i / geos.length), o.matrix); }
+  ims.forEach((im, k) => { im.count = Math.ceil((n - k) / geos.length); });
+  return ims;
+}
 // Icing sugar on the fillings: rays dropped from above land the flecks wherever the filling is.
 function dustOver(targets, n, rx, rz, into) {
   const ray = new THREE.Raycaster(), o = new THREE.Object3D(), mats = [], dn = new THREE.Vector3(0, -1, 0);
@@ -275,6 +308,9 @@ function berlinesa(kind) {
   for (let i = 0; i < n; i++) { const a = rand(0, 6.283), r = R * .93 * Math.pow(rnd(), .6), v = shape(new THREE.Vector3(Math.cos(a) * r, domeY(r) + .001, Math.sin(a) * r));
     o.position.copy(v); o.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3)); const s = rand(.0016, .0045); o.scale.set(s, s * .5, s * rand(.7, 1.3)); o.updateMatrix(); im.setMatrixAt(i, o.matrix); }
   g.add(im);
+  // Soft clumps where the sugar caught and balled up, mostly on the crown.
+  g.add(...scatter(CLUMPS, MAT.sugar, 160, q => { const a = rand(0, 6.283), r = R * .85 * Math.pow(rnd(), .8); q.position.copy(shape(new THREE.Vector3(Math.cos(a) * r, domeY(r) - .0005, Math.sin(a) * r)));
+    q.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3)); const s = .002 + Math.pow(rnd(), 3) * .006; q.scale.set(s * rand(.8, 1.4), s * .45, s * rand(.8, 1.4)); }));
   const fills = [];
   if (kind === 'dulce' || kind === 'choc') {
     g.add(slit());
@@ -284,10 +320,11 @@ function berlinesa(kind) {
     dustOver(fills, 900, .23, .1, g);
   } else if (kind === 'biscoff') {
     const ros = swirl(.1, .1, .036, MAT.biscoffCream); g.add(ros); fills.push(ros);
-    const b = biscuit(); b.position.set(0, TOP + .11, -.02); b.rotation.set(-.24, rand(-.3, .3), rand(-.1, .1)); g.add(b); fills.push(b.children[0]);
-    const crumbGeo = new THREE.IcosahedronGeometry(1, 1), cr = new THREE.InstancedMesh(crumbGeo, MAT.biscuit, 60), q = new THREE.Object3D();
-    for (let i = 0; i < 60; i++) { const a = rand(0, 6.283), r = rand(.1, .17); q.position.set(Math.cos(a) * r, domeY(r) + .002, Math.sin(a) * r); q.rotation.set(rand(0, 3), rand(0, 3), 0); const s = rand(.003, .009); q.scale.set(s * rand(1, 1.6), s * .5, s); q.updateMatrix(); cr.setMatrixAt(i, q.matrix); }
-    g.add(cr); dustOver(fills, 450, .16, .16, g);
+    const b = biscuit(); b.position.set(0, TOP + .1, -.04); b.rotation.set(-.55, rand(-.3, .3), rand(-.1, .1)); g.add(b); fills.push(b.children[0]);
+    // Crushed biscuit: broken, angular bits from dust to chunks, thickest around the swirl.
+    g.add(...scatter(CRUMBS, crumbMatFlat, 90, q => { const a = rand(0, 6.283), r = rand(.09, .2) * (rnd() < .7 ? .8 : 1.1); q.position.copy(shape(new THREE.Vector3(Math.cos(a) * r, domeY(r) + .0015, Math.sin(a) * r)));
+      q.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3)); const s = .0015 + Math.pow(rnd(), 2.4) * .011; q.scale.set(s * rand(.8, 1.5), s * rand(.35, .7), s * rand(.7, 1.2)); }));
+    dustOver(fills, 450, .16, .16, g);
   } else if (kind === 'custard') {
     const cu = swirl(.11, .12, .04, MAT.custard, 2.2); g.add(cu); fills.push(cu);
     dustOver(fills, 450, .16, .16, g);
@@ -298,17 +335,23 @@ function berlinesa(kind) {
 
 /* ---------------- The board and the table ---------------- */
 const BOARD_R = 1.2, BOARD_T = .062;
+let rim, top; // the board's edge and face, re-dressed once the photographed wood arrives
 const LAYOUT = [['custard', 0, 0]];
 ['dulce', 'biscoff', 'choc', 'dulce', 'biscoff'].forEach((k, i) => { const a = i / 5 * Math.PI * 2 + .45 + rand(-.12, .12), d = .69 + rand(-.03, .03); LAYOUT.push([k, Math.cos(a) * d, Math.sin(a) * d]); });
 LAYOUT[0][1] += rand(-.04, .04); LAYOUT[0][2] += rand(-.04, .04);
-function woodTop() {
+// The board's face: a photographed oak veneer when it has loaded (cropped to a board-sized piece), painted grain until then.
+const WOOD_CROP = .55;
+function woodTop(photo) {
   const S = 2048, [c, g] = makeCanvas(S); g.fillStyle = '#B88C58'; g.fillRect(0, 0, S, S);
+  if (photo) { g.drawImage(photo, 0, 0, photo.width * WOOD_CROP, photo.height * WOOD_CROP, 0, 0, S, S); g.globalAlpha = .12; g.fillStyle = '#F2D9B0'; g.fillRect(0, 0, S, S); }
+  else {
   g.globalAlpha = .5; g.drawImage(tinted(NZ.lo, '#E3BF8C'), 0, 0, S, S); g.globalAlpha = .25; g.drawImage(tinted(NZ.mid, '#B98852'), 0, 0, S, S);
   // Grain: long wavy lines across the board, with a few darker growth lines.
   for (let i = 0; i < 320; i++) { const y0 = rnd() * S, dark = rnd() < .18; g.strokeStyle = dark ? '#94653A' : (rnd() < .5 ? '#B5844F' : '#E2C08F'); g.globalAlpha = dark ? rand(.18, .32) : rand(.06, .18); g.lineWidth = dark ? rand(1.5, 4) : rand(.6, 2.4);
     const f = rand(.6, 1.6), ph = rand(0, 6), amp = rand(4, 16); g.beginPath(); for (let x = -10; x <= S + 10; x += 16) { const y = y0 + Math.sin(x / S * Math.PI * 2 * f + ph) * amp + (vnoise(x * .004, y0 * .01, 3) - .5) * 30; x < 0 ? g.moveTo(x, y) : g.lineTo(x, y); } g.stroke(); }
   for (let i = 0; i < 5000; i++) { const x = rnd() * S, y = rnd() * S; g.strokeStyle = rnd() < .5 ? '#A47546' : '#E8CA9C'; g.globalAlpha = rand(.04, .12); g.lineWidth = rand(.5, 1.2); g.beginPath(); g.moveTo(x, y); g.lineTo(x + rand(8, 40), y + rand(-1, 1)); g.stroke(); }
   // Knife marks from years of use.
+  }
   for (let i = 0; i < 70; i++) { const x = rnd() * S, y = rnd() * S, a = rand(0, 6.283), l = rand(40, 260); g.strokeStyle = rnd() < .6 ? '#F1DCBC' : '#8E6136'; g.globalAlpha = rand(.06, .16); g.lineWidth = rand(.5, 1.4); g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke(); }
   // Icing sugar that fell off the berlinesas: a soft haze and loose grains around each one.
   const px = v => (v / BOARD_R + 1) / 2 * S;
@@ -326,9 +369,9 @@ function board() {
   const rimProfile = [[0, 0], [BOARD_R - .03, 0], [BOARD_R - .006, .006], [BOARD_R, .022], [BOARD_R, .042], [BOARD_R - .006, .056], [BOARD_R - .022, BOARD_T], [BOARD_R - .03, BOARD_T]].map(([x, y]) => new THREE.Vector2(x, y));
   const [rc, rg] = makeCanvas(512); rg.fillStyle = '#C49A66'; rg.fillRect(0, 0, 512, 512);
   for (let i = 0; i < 90; i++) { const x = rnd() * 512; rg.strokeStyle = rnd() < .5 ? '#9C6E40' : '#DDB98A'; rg.globalAlpha = rand(.1, .3); rg.lineWidth = rand(1, 4); rg.beginPath(); rg.moveTo(x, 0); rg.lineTo(x + rand(-10, 10), 512); rg.stroke(); }
-  const rim = new THREE.Mesh(new THREE.LatheGeometry(rimProfile, 200), new THREE.MeshStandardMaterial({ map: texOf(rc, 10, 1), roughness: .62 }));
+  rim = new THREE.Mesh(new THREE.LatheGeometry(rimProfile, 200), new THREE.MeshStandardMaterial({ map: texOf(rc, 10, 1), roughness: .62 }));
   const topTex = texOf(woodTop(), 1, 1); topTex.wrapS = topTex.wrapT = THREE.ClampToEdgeWrapping;
-  const top = new THREE.Mesh(new THREE.CircleGeometry(BOARD_R - .021, 200), new THREE.MeshStandardMaterial({ map: topTex, roughness: .66, bumpMap: texOf(noiseCanvas(512, 30, 3, 1.4), 4, 4, false), bumpScale: .6 }));
+  top = new THREE.Mesh(new THREE.CircleGeometry(BOARD_R - .021, 200), new THREE.MeshStandardMaterial({ map: topTex, roughness: .66, bumpMap: texOf(noiseCanvas(512, 30, 3, 1.4), 4, 4, false), bumpScale: .6 }));
   top.rotation.x = -Math.PI / 2; top.position.y = BOARD_T + .0004;
   rim.castShadow = true; rim.receiveShadow = true; top.receiveShadow = true; g.add(rim, top);
   // Loose grains of sugar with real depth, near the berlinesas.
@@ -343,8 +386,8 @@ function board() {
 /* ---------------- Scene ---------------- */
 const scene = new THREE.Scene();
 const BG = new THREE.Color(0x151211); scene.background = BG; scene.fog = new THREE.Fog(BG, 7, 15);
-scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .04).texture; scene.environmentIntensity = .38;
-scene.add(new THREE.HemisphereLight(0xFFF4E6, 0x2A2420, .25));
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .04).texture; scene.environmentIntensity = .26;
+scene.add(new THREE.HemisphereLight(0xFFF4E6, 0x2A2420, .13));
 const key = new THREE.DirectionalLight(0xFFEBD2, 2.7); key.position.set(-2.4, 6.5, 3); key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048); key.shadow.radius = 12; key.shadow.blurSamples = 24; key.shadow.bias = -.0004;
 Object.assign(key.shadow.camera, { left: -2, right: 2, top: 2, bottom: -2, near: 1, far: 16 }); scene.add(key);
@@ -363,15 +406,30 @@ const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, sample
 const composer = new EffectComposer(renderer, rt);
 composer.addPass(new RenderPass(scene, camera));
 const gtao = new GTAOPass(scene, camera, 1, 1);
-gtao.updateGtaoMaterial({ radius: .22, distanceExponent: 1.5, thickness: 1.5, scale: 1.1, samples: small ? 12 : 16 });
+gtao.updateGtaoMaterial({ radius: .26, distanceExponent: 1.5, thickness: 1.5, scale: 1.6, samples: small ? 12 : 16 });
 gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
-gtao.blendIntensity = .9; composer.addPass(gtao);
+gtao.blendIntensity = 1; composer.addPass(gtao);
+// Cool the occlusion: crevices and contact shadows lose red faster than blue, the way bounced skylight fills them.
+gtao.blendMaterial.fragmentShader = 'uniform float intensity; uniform sampler2D tDiffuse; varying vec2 vUv; void main(){ vec4 t = texture2D(tDiffuse, vUv); float ao = t.r; gl_FragColor = vec4(mix(vec3(1.), vec3(pow(ao, 1.15), pow(ao, 1.02), pow(ao, .8)), intensity), t.a); }';
+gtao.blendMaterial.needsUpdate = true;
 const bokeh = new BokehPass(scene, camera, { focus: 4, aperture: .0045, maxblur: .0045 }); composer.addPass(bokeh);
+// A faint glow off the brightest sugar, like a real lens.
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(256, 256), .14, .5, .82));
 composer.addPass(new OutputPass());
+// Grade and lens: a little more saturation, cool shadows, a hair of colour fringing towards the corners, vignette and grain.
 const finish = new ShaderPass({
   uniforms: { tDiffuse: { value: null }, uTime: { value: 0 } },
   vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
-  fragmentShader: 'uniform sampler2D tDiffuse; uniform float uTime; varying vec2 vUv; float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); } void main(){ vec4 c = texture2D(tDiffuse, vUv); vec2 d = vUv - .5; c.rgb *= 1. - .38 * smoothstep(.28, .9, length(d * vec2(1.15, 1.))); c.rgb += (h(vUv * 1000. + uTime) - .5) * .028; gl_FragColor = c; }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float uTime; varying vec2 vUv;
+    float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main(){
+      vec2 d = vUv - .5, sh = d * .0035;
+      vec4 c = texture2D(tDiffuse, vUv); c.r = texture2D(tDiffuse, vUv + sh).r; c.b = texture2D(tDiffuse, vUv - sh).b;
+      float l = dot(c.rgb, vec3(.2126, .7152, .0722));
+      c.rgb = mix(vec3(l), c.rgb, 1.16);
+      c.rgb = mix(c.rgb, c.rgb * vec3(.88, .96, 1.16), (1. - smoothstep(.04, .45, l)) * .55);
+      c.rgb *= 1. - .38 * smoothstep(.28, .9, length(d * vec2(1.15, 1.)));
+      c.rgb += (h(vUv * 1000. + uTime) - .5) * .028; gl_FragColor = c; }`,
 });
 composer.addPass(finish);
 
@@ -404,7 +462,29 @@ function loop() {
   requestAnimationFrame(loop);
 }
 loop();
-requestAnimationFrame(() => document.documentElement.classList.add('ready'));
+
+// Photographed oak and a real studio's light (Poly Haven, CC0). Browsers won't hand images from a file:// page to WebGL,
+// so a copy opened straight from disk keeps the painted wood and the generated room.
+const tex = f => new THREE.TextureLoader().loadAsync('textures/' + f);
+const photos = location.protocol === 'file:' ? Promise.resolve(null) : Promise.race([
+  Promise.all([new RGBELoader().loadAsync('textures/studio_1k.hdr'), tex('oak_diff.jpg'), tex('oak_nor.jpg'), tex('oak_rough.jpg'), tex('floor_herringbone.jpg')]),
+  new Promise(r => setTimeout(r, 15000, null)),
+]).catch(() => null);
+photos.then(got => {
+  if (!got) return;
+  const [hdr, diff, nor, rough, floor] = got;
+  hdr.mapping = THREE.EquirectangularReflectionMapping; scene.environment = hdr; scene.environmentIntensity = .34; scene.environmentRotation.y = 2.2;
+  for (const t of [nor, rough]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(WOOD_CROP, WOOD_CROP); t.offset.set(0, 1 - WOOD_CROP); t.anisotropy = ANISO; }
+  const face = texOf(woodTop(diff.image), 1, 1); face.wrapS = face.wrapT = THREE.ClampToEdgeWrapping;
+  Object.assign(top.material, { map: face, normalMap: nor, normalScale: new THREE.Vector2(.7, .7), roughnessMap: rough, roughness: 1, bumpMap: null }); top.material.needsUpdate = true;
+  diff.colorSpace = THREE.SRGBColorSpace; diff.wrapS = diff.wrapT = THREE.RepeatWrapping; diff.repeat.set(4, .05); diff.anisotropy = ANISO;
+  rim.material.map = diff; rim.material.needsUpdate = true;
+  // Herringbone parquet under the board; the same photo, read as height, sinks the dark seams and grain.
+  const floorH = floor.clone(); floorH.needsUpdate = true;
+  for (const t of [floor, floorH]) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(4, 4); t.anisotropy = ANISO; }
+  floor.colorSpace = THREE.SRGBColorSpace;
+  Object.assign(table.material, { map: floor, bumpMap: floorH, bumpScale: 1.2, roughness: .58 }); table.material.needsUpdate = true;
+}).finally(() => requestAnimationFrame(() => document.documentElement.classList.add('ready')));
 </script>
 </body>
 </html>

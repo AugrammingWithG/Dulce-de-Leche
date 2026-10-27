@@ -20,8 +20,9 @@ export default defineConfig({
       },
     },
   },
+  // lib/ and the 3D sample's textures/ are fetched by plain paths at runtime, so they're copied over as-is.
   plugins: [{
-    name: 'copy-lib',
-    closeBundle() { cpSync(resolve(import.meta.dirname, 'dulce-de-leche/lib'), resolve(import.meta.dirname, 'dist/lib'), { recursive: true }); },
+    name: 'copy-static',
+    closeBundle() { for (const dir of ['lib', 'textures']) cpSync(resolve(import.meta.dirname, 'dulce-de-leche', dir), resolve(import.meta.dirname, 'dist', dir), { recursive: true }); },
   }],
 });
