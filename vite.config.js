@@ -16,6 +16,7 @@ export default defineConfig({
       input: {
         main: resolve(import.meta.dirname, 'dulce-de-leche/index.html'),
         admin: resolve(import.meta.dirname, 'dulce-de-leche/admin.html'),
+        berlinesas: resolve(import.meta.dirname, 'dulce-de-leche/sample-berlinesas.html'),
       },
     },
   },
