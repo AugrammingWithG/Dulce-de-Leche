@@ -6,7 +6,7 @@
  * Every page talks only to window.DDL, so nothing else has to change.
  */
 (function () {
-  const KEY = 'ddl-store-v1', VERSION = 2;
+  const KEY = 'ddl-store-v1', VERSION = 3;
   const pad = n => String(n).padStart(2, '0');
   const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00'); d.setDate(d.getDate() + n); return isoDate(d); };
@@ -17,17 +17,20 @@
 
   // The menu the owners edit in the counter view. Prices stay null until they give us their price list.
   // Allergens are a starting point from the obvious ingredients and must be confirmed by the bakery.
+  // featured: shown as a favourite on the website (a guess until the owners pick their real best sellers).
+  // audience: who it is offered to; 'business' items also appear in the business section and catalogue.
   const DEFAULT_MENU = [
-    { id: 'croissant', shelf: 'Pastries', name: 'Filled croissant', desc: 'Dulce de leche, chocolate, pistachio or berry.', flavours: ['Dulce de leche', 'Chocolate', 'Pistachio', 'Berry'], price: null, allergens: ['Gluten', 'Dairy', 'Egg', 'Tree nuts'], status: 'available' },
-    { id: 'muffin', shelf: 'Pastries', name: 'Loaded muffin', desc: 'Kit Kat, berry and peach.', flavours: ['Kit Kat', 'Berry', 'Peach'], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available' },
-    { id: 'alfajor', shelf: 'Pastries', name: 'Alfajor', desc: 'Dulce de leche sandwiched between soft biscuits.', flavours: ['Coconut', 'Chocolate'], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available' },
-    { id: 'biscoff', shelf: 'Pastries', name: 'Biscoff pastry', desc: 'Flaky pastry with Lotus Biscoff.', flavours: [], price: null, allergens: ['Gluten', 'Dairy'], status: 'available' },
-    { id: 'milhoja', shelf: 'Cakes by the slice', name: 'Milhoja', desc: 'Layers of puff pastry and dulce de leche, the Uruguayan classic.', flavours: [], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available' },
-    { id: 'cheesecake', shelf: 'Cakes by the slice', name: 'Biscoff cheesecake', desc: 'Made with Lotus Biscoff.', flavours: [], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available' },
-    { id: 'continental', shelf: 'Cakes by the slice', name: 'Continental cake', desc: 'Cream, sponge and fresh strawberries.', flavours: [], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available' },
-    { id: 'chivito', shelf: 'Cafe and savoury', name: 'Chivito', desc: 'Uruguay’s famous steak sandwich, loaded and grilled.', flavours: [], price: 20, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available' },
-    { id: 'chips', shelf: 'Cafe and savoury', name: 'Chips', desc: 'With your chivito.', flavours: [], price: 3, allergens: [], status: 'available', addOnTo: 'chivito' },
-    { id: 'coffee', shelf: 'Cafe and savoury', name: 'Coffee', desc: 'Flat whites, lattes and cortados for the early start.', flavours: ['Flat white', 'Latte', 'Cortado'], price: null, allergens: ['Dairy'], status: 'available', untracked: true },
+    { id: 'croissant', shelf: 'Pastries', name: 'Filled croissant', desc: 'Dulce de leche, chocolate, pistachio or berry.', flavours: ['Dulce de leche', 'Chocolate', 'Pistachio', 'Berry'], price: null, allergens: ['Gluten', 'Dairy', 'Egg', 'Tree nuts'], status: 'available', featured: true, audience: ['personal', 'business'] },
+    { id: 'alfajor', shelf: 'Pastries', name: 'Alfajor', desc: 'Dulce de leche sandwiched between soft biscuits.', flavours: ['Coconut', 'Chocolate'], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available', featured: true, audience: ['personal', 'business'] },
+    { id: 'berlinesa', shelf: 'Pastries', name: 'Berlinesa', desc: 'Filled doughnuts, rolled warm in icing sugar.', flavours: ['Dulce de leche', 'Lotus Biscoff', 'Custard', 'Chocolate'], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available', featured: true, audience: ['personal', 'business'] },
+    { id: 'muffin', shelf: 'Pastries', name: 'Loaded muffin', desc: 'Kit Kat, berry and peach.', flavours: ['Kit Kat', 'Berry', 'Peach'], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available', audience: ['personal', 'business'] },
+    { id: 'biscoff', shelf: 'Pastries', name: 'Biscoff pastry', desc: 'Flaky pastry with Lotus Biscoff.', flavours: [], price: null, allergens: ['Gluten', 'Dairy'], status: 'available', featured: true, audience: ['personal', 'business'] },
+    { id: 'milhoja', shelf: 'Cakes by the slice', name: 'Milhoja', desc: 'Layers of puff pastry and dulce de leche, the Uruguayan classic.', flavours: [], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available', featured: true, audience: ['personal', 'business'] },
+    { id: 'cheesecake', shelf: 'Cakes by the slice', name: 'Biscoff cheesecake', desc: 'Made with Lotus Biscoff.', flavours: [], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available', audience: ['personal', 'business'] },
+    { id: 'continental', shelf: 'Cakes by the slice', name: 'Continental cake', desc: 'Cream, sponge and fresh strawberries.', flavours: [], price: null, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available', audience: ['personal', 'business'] },
+    { id: 'chivito', shelf: 'Cafe and savoury', name: 'Chivito', desc: 'Uruguay’s famous steak sandwich, loaded and grilled.', flavours: [], price: 20, allergens: ['Gluten', 'Dairy', 'Egg'], status: 'available', featured: true, audience: ['personal', 'business'] },
+    { id: 'chips', shelf: 'Cafe and savoury', name: 'Chips', desc: 'With your chivito.', flavours: [], price: 3, allergens: [], status: 'available', addOnTo: 'chivito', audience: ['personal'] },
+    { id: 'coffee', shelf: 'Cafe and savoury', name: 'Coffee', desc: 'Flat whites, lattes and cortados for the early start.', flavours: ['Flat white', 'Latte', 'Cortado'], price: null, allergens: ['Dairy'], status: 'available', untracked: true, audience: ['personal'] },
   ];
   const SHELVES = ['Pastries', 'Cakes by the slice', 'Cafe and savoury'];
   const ALLERGENS = ['Gluten', 'Dairy', 'Egg', 'Tree nuts', 'Peanuts', 'Soy', 'Sesame'];
@@ -49,7 +52,7 @@
   function seed() {
     const s = { v: VERSION, sample: true, seededFor: TODAY, orders: [], made: {}, counter: {}, menu: clone(DEFAULT_MENU), settings: clone(DEFAULT_SETTINGS), messages: [] };
     const y = addDays(TODAY, -1);
-    const made = { 'croissant|Dulce de leche': 24, 'croissant|Chocolate': 18, 'croissant|Pistachio': 12, 'croissant|Berry': 12, 'muffin|Kit Kat': 12, 'muffin|Berry': 12, 'muffin|Peach': 8, 'alfajor|Coconut': 30, 'alfajor|Chocolate': 30, 'biscoff|Regular': 12, 'milhoja|Regular': 10, 'cheesecake|Regular': 8, 'continental|Regular': 8, 'chivito|Regular': 15, 'chips|Regular': 20 };
+    const made = { 'croissant|Dulce de leche': 24, 'croissant|Chocolate': 18, 'croissant|Pistachio': 12, 'croissant|Berry': 12, 'muffin|Kit Kat': 12, 'muffin|Berry': 12, 'muffin|Peach': 8, 'alfajor|Coconut': 30, 'alfajor|Chocolate': 30, 'berlinesa|Dulce de leche': 12, 'berlinesa|Lotus Biscoff': 10, 'berlinesa|Custard': 10, 'berlinesa|Chocolate': 10,'biscoff|Regular': 12, 'milhoja|Regular': 10, 'cheesecake|Regular': 8, 'continental|Regular': 8, 'chivito|Regular': 15, 'chips|Regular': 20 };
     s.made[TODAY] = { ...made, 'croissant|Pistachio': 8, 'continental|Regular': 2 }; s.made[y] = { ...made, 'croissant|Pistachio': 10, 'muffin|Peach': 10 };
     s.made[addDays(TODAY, 1)] = { ...made };
     s.counter[TODAY] = { 'croissant|Dulce de leche': 9, 'croissant|Chocolate': 5, 'croissant|Pistachio': 6, 'croissant|Berry': 4, 'muffin|Kit Kat': 3, 'muffin|Berry': 5, 'muffin|Peach': 2, 'alfajor|Coconut': 7, 'alfajor|Chocolate': 4, 'biscoff|Regular': 6, 'milhoja|Regular': 3, 'cheesecake|Regular': 2, 'coffee|Flat white': 21, 'coffee|Latte': 6, 'coffee|Cortado': 7, 'chivito|Regular': 2, 'chips|Regular': 2 };
@@ -83,10 +86,19 @@
   const clone = o => JSON.parse(JSON.stringify(o));
   function fill(t, v) { return String(t || '').replace(/\{(\w+)\}/g, (m, k) => v[k] ?? m); }
 
-  // Older saves (v1) had only orders and stock: add the menu, settings and messages.
+  // Older saves: v1 had only orders and stock (add the menu, settings and messages); v2 menus lack the
+  // berlinesa and the featured/audience fields. The owners' own edits (names, prices, status) are kept.
   function migrate(s) {
     if (s.v === VERSION) return s;
     s.menu = s.menu || clone(DEFAULT_MENU); s.settings = Object.assign(clone(DEFAULT_SETTINGS), s.settings || {}); s.messages = s.messages || [];
+    if (s.v < 3) {
+      DEFAULT_MENU.forEach((d, i) => {
+        const m = s.menu.find(x => x.id === d.id);
+        if (!m) { const after = DEFAULT_MENU.slice(0, i).reverse().find(p => s.menu.some(x => x.id === p.id)); const at = after ? s.menu.findIndex(x => x.id === after.id) + 1 : s.menu.length; s.menu.splice(at, 0, clone(d)); return; }
+        if (m.featured === undefined && d.featured) m.featured = true;
+        if (!m.audience) m.audience = clone(d.audience);
+      });
+    }
     s.v = VERSION; return s;
   }
   // Sample data is dated around the day it was made; on a later day, slide every date forward.
